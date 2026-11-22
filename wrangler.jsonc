@@ -12,6 +12,8 @@
   ],
   "vars": {
     "MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
-    "ASSISTANT_NAME": "Haki"
+    "ASSISTANT_NAME": "Haki",
+    // sites allowed to show the chat widget (space-separated https origins)
+    "EMBED_ORIGINS": "https://aziflow.com https://www.aziflow.com"
   }
 }

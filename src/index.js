@@ -1,5 +1,6 @@
 import { KNOWLEDGE } from "./knowledge.js";
 import { PAGE } from "./page.js";
+import { WIDGET, frameAncestors } from "./widget.js";
 
 const MAX_MESSAGE = 500;   // characters per visitor message
 const MAX_TURNS = 8;       // past turns kept from the client
@@ -109,6 +110,31 @@ export default {
     if (url.pathname === "/api/chat") {
       if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
       return chat(request, env);
+    }
+
+    if (url.pathname === "/widget.js" && request.method === "GET") {
+      return new Response(WIDGET(env.ASSISTANT_NAME || "Haki"), {
+        headers: {
+          "content-type": "text/javascript; charset=utf-8",
+          "cache-control": "public, max-age=300",
+          "cross-origin-resource-policy": "cross-origin",
+          "x-content-type-options": "nosniff",
+        },
+      });
+    }
+
+    // The chat inside the site widget's iframe: same page, framable only by EMBED_ORIGINS.
+    if (url.pathname === "/embed" && request.method === "GET") {
+      return new Response(PAGE(env.ASSISTANT_NAME || "Haki"), {
+        headers: {
+          "content-type": "text/html; charset=utf-8",
+          "content-security-policy":
+            "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors " +
+            frameAncestors(env.EMBED_ORIGINS),
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "no-referrer",
+        },
+      });
     }
 
     if (url.pathname === "/" && request.method === "GET") {

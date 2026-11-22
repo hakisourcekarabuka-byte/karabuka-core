@@ -1,6 +1,38 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import worker, { sseToText } from "../src/index.js";
+import { frameAncestors } from "../src/widget.js";
+
+test("widget.js is served as script, cross-origin loadable, without the model name", async () => {
+  const r = await worker.fetch(new Request("https://x/widget.js"), env());
+  assert.equal(r.status, 200);
+  assert.match(r.headers.get("content-type"), /^text\/javascript/);
+  assert.equal(r.headers.get("cross-origin-resource-policy"), "cross-origin");
+  const js = await r.text();
+  assert.match(js, /\/embed/);
+  assert.match(js, /attachShadow/);
+  assert.doesNotMatch(js, /llama/);
+  new Function(js); // parses
+});
+
+test("/embed is framable only by EMBED_ORIGINS; / stays DENY", async () => {
+  const r = await worker.fetch(new Request("https://x/embed"), env({ EMBED_ORIGINS: "https://aziflow.com https://www.aziflow.com" }));
+  assert.equal(r.status, 200);
+  assert.equal(r.headers.get("x-frame-options"), null);
+  assert.match(r.headers.get("content-security-policy"), /frame-ancestors https:\/\/aziflow\.com https:\/\/www\.aziflow\.com$/);
+  const none = await worker.fetch(new Request("https://x/embed"), env());
+  assert.match(none.headers.get("content-security-policy"), /frame-ancestors 'none'$/);
+  const home = await worker.fetch(new Request("https://x/"), env({ EMBED_ORIGINS: "https://aziflow.com" }));
+  assert.equal(home.headers.get("x-frame-options"), "DENY");
+});
+
+test("frameAncestors drops anything that is not a plain https origin", () => {
+  assert.equal(frameAncestors(""), "'none'");
+  assert.equal(frameAncestors(undefined), "'none'");
+  assert.equal(frameAncestors("*"), "'none'");
+  assert.equal(frameAncestors("http://aziflow.com https://x.com/path 'self' https://a.b;script-src"), "'none'");
+  assert.equal(frameAncestors("https://aziflow.com, https://dev.aziflow.com:8443"), "https://aziflow.com https://dev.aziflow.com:8443");
+});
 
 const sse = (parts) => new ReadableStream({
   start(c) { const e = new TextEncoder(); for (const p of parts) c.enqueue(e.encode(p)); c.close(); },
