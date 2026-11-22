@@ -38,6 +38,33 @@ function cleanHistory(raw) {
     .map((m) => ({ role: m.role, content: m.content.slice(0, MAX_MESSAGE) }));
 }
 
+// Workers AI streams Server-Sent Events: `data: {"response":"tok"}` lines, then `data: [DONE]`.
+// Turn them into plain text so the page only appends what arrives.
+export function sseToText() {
+  const dec = new TextDecoder();
+  const enc = new TextEncoder();
+  let buf = "";
+  const emit = (line, ctrl) => {
+    if (!line.startsWith("data:")) return;
+    const data = line.slice(5).trim();
+    if (!data || data === "[DONE]") return;
+    try {
+      const j = JSON.parse(data);
+      const tok = j.response ?? j.choices?.[0]?.delta?.content ?? "";
+      if (tok) ctrl.enqueue(enc.encode(tok));
+    } catch { /* partial or unknown line: skip */ }
+  };
+  return new TransformStream({
+    transform(chunk, ctrl) {
+      buf += dec.decode(chunk, { stream: true });
+      const lines = buf.split("\n");
+      buf = lines.pop();
+      for (const l of lines) emit(l.trim(), ctrl);
+    },
+    flush(ctrl) { if (buf) emit(buf.trim(), ctrl); },
+  });
+}
+
 async function chat(request, env) {
   const ip = request.headers.get("cf-connecting-ip") || "unknown";
   if (env.LIMITER) {
@@ -59,6 +86,12 @@ async function chat(request, env) {
   ];
 
   try {
+    if (body.stream === true) {
+      const sse = await env.AI.run(env.MODEL, { messages, max_tokens: MAX_TOKENS, stream: true });
+      return new Response(sse.pipeThrough(sseToText()), {
+        headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store", ...SECURITY_HEADERS },
+      });
+    }
     const out = await env.AI.run(env.MODEL, { messages, max_tokens: MAX_TOKENS });
     return json({ reply: (out?.response || "").trim() });
   } catch (err) {
