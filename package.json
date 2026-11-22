@@ -6,7 +6,8 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "karabuka-core": "node --check src/index.js && node --check src/page.js && node --check src/knowledge.js",
+    "karabuka-core": "node --test test/core.test.js",
+    "test": "node --test test/core.test.js",
     "dev": "wrangler dev",
     "deploy": "wrangler deploy"
   },
