@@ -1,0 +1,16 @@
+{
+  "name": "karabuka-core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The AI core of the AZIFLOW site: a small chat on Cloudflare Workers AI.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "karabuka-core": "node --check src/index.js && node --check src/page.js && node --check src/knowledge.js",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "4.158.0"
+  }
+}
