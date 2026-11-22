@@ -66,7 +66,37 @@ export function sseToText() {
   });
 }
 
-async function chat(request, env) {
+// Conversation memory (optional MEMORY KV binding): the last MAX_TURNS turns of one visitor,
+// keyed by a random id the page keeps in its own storage, kept MEMORY_TTL seconds, then gone.
+// With memory, the stored turns replace whatever history the client sends.
+const MEMORY_TTL = 24 * 60 * 60;
+const SID = /^[A-Za-z0-9_-]{16,64}$/;
+const memKey = (sid) => `c:${sid}`;
+
+async function recall(env, sid) {
+  if (!env.MEMORY || !SID.test(sid || "")) return null;
+  try { return cleanHistory(JSON.parse((await env.MEMORY.get(memKey(sid))) || "[]")); } catch { return []; }
+}
+
+async function remember(env, sid, turns) {
+  if (!env.MEMORY || !SID.test(sid || "")) return;
+  try {
+    await env.MEMORY.put(memKey(sid), JSON.stringify(cleanHistory(turns)), { expirationTtl: MEMORY_TTL });
+  } catch (err) { console.error("memory_error", err?.message); }
+}
+
+async function history(request, env) {
+  if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
+  let body;
+  try { body = await request.json(); } catch { return json({ error: "invalid_json" }, 400); }
+  const sid = typeof body?.sid === "string" ? body.sid : "";
+  if (!SID.test(sid)) return json({ error: "bad_sid" }, 400);
+  if (!env.MEMORY) return json({ history: [] });
+  if (body.forget === true) { await env.MEMORY.delete(memKey(sid)); return json({ history: [] }); }
+  return json({ history: (await recall(env, sid)) || [] });
+}
+
+async function chat(request, env, ctx) {
   const ip = request.headers.get("cf-connecting-ip") || "unknown";
   if (env.LIMITER) {
     const { success } = await env.LIMITER.limit({ key: ip });
@@ -80,21 +110,38 @@ async function chat(request, env) {
   if (!message) return json({ error: "empty_message" }, 400);
   if (message.length > MAX_MESSAGE) return json({ error: "message_too_long", max: MAX_MESSAGE }, 413);
 
+  const sid = typeof body.sid === "string" ? body.sid : "";
+  const past = (await recall(env, sid)) ?? cleanHistory(body.history);
   const messages = [
     { role: "system", content: systemPrompt(env.ASSISTANT_NAME || "Haki") },
-    ...cleanHistory(body.history),
+    ...past,
     { role: "user", content: message },
   ];
+  const keep = (reply) => {
+    if (!reply) return;
+    const p = remember(env, sid, [...past, { role: "user", content: message }, { role: "assistant", content: reply }]);
+    if (ctx?.waitUntil) ctx.waitUntil(p);
+    return p;
+  };
 
   try {
     if (body.stream === true) {
       const sse = await env.AI.run(env.MODEL, { messages, max_tokens: MAX_TOKENS, stream: true });
-      return new Response(sse.pipeThrough(sseToText()), {
+      let [toClient, toMemory] = sse.pipeThrough(sseToText()).tee();
+      if (env.MEMORY && SID.test(sid)) {
+        const collect = new Response(toMemory).text().then((t) => keep(t.trim()));
+        if (ctx?.waitUntil) ctx.waitUntil(collect);
+      } else {
+        toMemory.cancel();
+      }
+      return new Response(toClient, {
         headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store", ...SECURITY_HEADERS },
       });
     }
     const out = await env.AI.run(env.MODEL, { messages, max_tokens: MAX_TOKENS });
-    return json({ reply: (out?.response || "").trim() });
+    const reply = (out?.response || "").trim();
+    await keep(reply);
+    return json({ reply });
   } catch (err) {
     console.error("ai_error", err?.message); // no visitor text in logs
     return json({ error: "ai_unavailable" }, 503);
@@ -102,15 +149,17 @@ async function chat(request, env) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
     if (url.pathname === "/api/health") return json({ ok: true });
 
     if (url.pathname === "/api/chat") {
       if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
-      return chat(request, env);
+      return chat(request, env, ctx);
     }
+
+    if (url.pathname === "/api/history") return history(request, env);
 
     if (url.pathname === "/widget.js" && request.method === "GET") {
       return new Response(WIDGET(env.ASSISTANT_NAME || "Haki"), {
