@@ -40,12 +40,14 @@ input{flex:1;min-width:0;font:inherit;padding:11px 14px;border:1px solid var(--l
 button{font:inherit;font-weight:600;padding:10px 18px;border:0;border-radius:12px;background:var(--accent);color:#fff;cursor:pointer}
 @media (prefers-color-scheme:dark){form button{color:#0b110f}}
 button:disabled{opacity:.5;cursor:default}
+header .ghost{margin-inline-start:auto;background:transparent;color:var(--muted);border:1px solid var(--line);font-weight:500;font-size:13px;padding:6px 12px}
+header .ghost:hover{color:var(--fg);border-color:var(--accent)}
 input:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 @media (prefers-reduced-motion:reduce){*{animation:none!important}}
 </style>
 </head>
 <body>
-<header><div class="orb" aria-hidden="true"></div><div><b>${esc(name)}</b><small>عقل AZIFLOW</small></div></header>
+<header><div class="orb" aria-hidden="true"></div><div><b>${esc(name)}</b><small>عقل AZIFLOW</small></div><button id="clr" type="button" class="ghost" title="بيمسح اللي بتذكره المحادثة">محادثة جديدة</button></header>
 <main id="log" aria-live="polite"></main>
 <div id="chips"></div>
 <form id="f">
@@ -55,6 +57,8 @@ input:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline
 <script>
 const log=document.getElementById('log'),f=document.getElementById('f'),q=document.getElementById('q'),b=document.getElementById('b'),chips=document.getElementById('chips');
 const history=[];
+// A random id kept in this browser only, so the chat remembers this visitor for a day.
+let sid='';try{sid=localStorage.getItem('karabuka.sid')||'';if(!/^[A-Za-z0-9_-]{16,64}$/.test(sid)){sid=crypto.randomUUID().replace(/-/g,'');localStorage.setItem('karabuka.sid',sid)}}catch{sid=''}
 const ERR={rate_limited:'كثير طلبات، استنى دقيقة.',message_too_long:'الرسالة طويلة كثير.',ai_unavailable:'الخدمة مش متاحة هلأ، جرّب بعد شوي.'};
 function add(cls,text){const d=document.createElement('div');d.className='m '+cls;if(text!=null)d.textContent=text;log.appendChild(d);log.scrollTop=log.scrollHeight;return d}
 add('assistant','أهلاً! أنا ${esc(name)}. اسألني أي إشي عن AZIFLOW.');
@@ -65,7 +69,7 @@ async function send(msg){
   const out=add('assistant');out.innerHTML='<span class="dots"><i></i><i></i><i></i></span>';
   let text='';
   try{
-    const r=await fetch('/api/chat',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({message:msg,history,stream:true})});
+    const r=await fetch('/api/chat',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({message:msg,history,stream:true,sid:sid||undefined})});
     if(!r.ok){let e='';try{e=(await r.json()).error}catch{}out.remove();add('err',ERR[e]||'صار خطأ.');}
     else{
       const rd=r.body.getReader(),dec=new TextDecoder();
@@ -78,6 +82,9 @@ async function send(msg){
   b.disabled=false;document.body.classList.remove('busy');q.focus();
 }
 f.addEventListener('submit',e=>{e.preventDefault();send(q.value)});
+const memo=(forget)=>fetch('/api/history',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sid,forget})}).then(r=>r.ok?r.json():{history:[]});
+if(sid)memo(false).then(d=>{const h=Array.isArray(d.history)?d.history:[];if(!h.length||history.length)return;chips.hidden=true;for(const m of h){history.push(m);add(m.role,m.content)}}).catch(()=>{});
+document.getElementById('clr').onclick=()=>{history.length=0;log.textContent='';chips.hidden=false;add('assistant','بلّشنا من جديد. شو بدك تعرف عن AZIFLOW؟');if(sid)memo(true).catch(()=>{})};
 </script>
 </body>
 </html>`;

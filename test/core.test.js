@@ -103,3 +103,44 @@ test("sseToText accepts the OpenAI-style delta shape too", async () => {
   const out = await new Response(sse(['data: {"choices":[{"delta":{"content":"a"}}]}\n', "data: [DONE]\n"]).pipeThrough(sseToText())).text();
   assert.equal(out, "a");
 });
+
+function kv() {
+  const m = new Map();
+  return { m, get: async (k) => m.get(k) ?? null, put: async (k, v, o) => { m.set(k, v); m.ttl = o?.expirationTtl; }, delete: async (k) => { m.delete(k); } };
+}
+const SIDV = "abcdefghij0123456789";
+
+test("memory: a reply is remembered for 24 h and replaces client history next time", async () => {
+  const MEMORY = kv();
+  let seen;
+  const e = env({ MEMORY, AI: { run: async (_m, i) => { seen = i.messages; return { response: "ok" }; } } });
+  await post({ message: "first", sid: SIDV, history: [{ role: "user", content: "forged" }] }, e);
+  assert.equal(MEMORY.m.ttl, 86400);
+  assert.ok(!seen.some((x) => x.content === "forged"), "client history ignored when memory is on");
+  await post({ message: "second", sid: SIDV }, e);
+  assert.deepEqual(seen.slice(1).map((x) => x.content), ["first", "ok", "second"]);
+});
+
+test("memory: streamed replies are stored after the stream ends", async () => {
+  const MEMORY = kv();
+  const waits = [];
+  const r = await worker.fetch(new Request("https://x/api/chat", { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ message: "hi", stream: true, sid: SIDV }) }), env({ MEMORY }), { waitUntil: (p) => waits.push(p) });
+  assert.equal(await r.text(), "مرحبا");
+  await Promise.all(waits);
+  assert.deepEqual(JSON.parse(MEMORY.m.get("c:" + SIDV)), [{ role: "user", content: "hi" }, { role: "assistant", content: "مرحبا" }]);
+});
+
+test("memory: history and forget; bad sid refused; no binding means nothing kept", async () => {
+  const MEMORY = kv();
+  const e = env({ MEMORY });
+  await post({ message: "x", sid: SIDV }, e);
+  const h = (b, en = e) => worker.fetch(new Request("https://x/api/history", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }), en);
+  assert.equal((await (await h({ sid: SIDV })).json()).history.length, 2);
+  assert.equal((await h({ sid: "short" })).status, 400);
+  assert.equal((await h({ sid: "../../etc/passwd/xxxxxxxx" })).status, 400);
+  await h({ sid: SIDV, forget: true });
+  assert.equal(MEMORY.m.size, 0);
+  assert.deepEqual(await (await h({ sid: SIDV }, env())).json(), { history: [] });
+  assert.equal((await worker.fetch(new Request("https://x/api/history"), e)).status, 405);
+});
